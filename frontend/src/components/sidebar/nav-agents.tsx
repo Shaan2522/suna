@@ -293,15 +293,7 @@ export function NavAgents() {
                           </a>
                         </DropdownMenuItem>
                         <DropdownMenuSeparator />
-                        <DropdownMenuItem onClick={() => {
-                          // Get the parent SidebarMenuItem element
-                          const menuItem = document.querySelector(`[data-sidebar="menu-item"]`);
-                          // Remove the element from the DOM if found
-                          if (menuItem) {
-                            menuItem.remove();
-                            toast.success("Menu item removed");
-                          }
-                        }}>
+                        <DropdownMenuItem>
                           <Trash2 className="text-muted-foreground" />
                           <span>Delete</span>
                         </DropdownMenuItem>
