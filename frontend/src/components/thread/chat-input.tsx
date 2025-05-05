@@ -29,6 +29,7 @@ const API_URL = process.env.NEXT_PUBLIC_BACKEND_URL || '';
 
 // Local storage keys
 const STORAGE_KEY_MODEL = 'suna-preferred-model';
+const DEFAULT_MODEL_ID = "sonnet-3.7"; // Define default model ID
 
 interface ChatInputProps {
   onSubmit: (message: string, options?: { model_name?: string; enable_thinking?: boolean }) => void;
@@ -72,18 +73,27 @@ export const ChatInput = forwardRef<ChatInputHandles, ChatInputProps>(({
   hideAttachments = false
 }, ref) => {
   const isControlled = controlledValue !== undefined && controlledOnChange !== undefined;
-  
+
   const [uncontrolledValue, setUncontrolledValue] = useState('');
   const value = isControlled ? controlledValue : uncontrolledValue;
 
-  const [selectedModel, setSelectedModel] = useState("sonnet-3.7");
+  // Define model options array earlier so it can be used in useEffect
+  const modelOptions = [
+    { id: "sonnet-3.7", label: "Sonnet 3.7" },
+    { id: "sonnet-3.7-thinking", label: "Sonnet 3.7 (Thinking)" },
+    { id: "gpt-4.1", label: "GPT-4.1" },
+    { id: "gemini-flash-2.5", label: "Gemini Flash 2.5" }
+  ];
+
+  // Initialize state with the default model
+  const [selectedModel, setSelectedModel] = useState(DEFAULT_MODEL_ID);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [isUploading, setIsUploading] = useState(false);
   const [isDraggingOver, setIsDraggingOver] = useState(false);
-  
+
   // Expose methods through the ref
   useImperativeHandle(ref, () => ({
     getPendingFiles: () => pendingFiles,
@@ -94,15 +104,20 @@ export const ChatInput = forwardRef<ChatInputHandles, ChatInputProps>(({
     if (typeof window !== 'undefined') {
       try {
         const savedModel = localStorage.getItem(STORAGE_KEY_MODEL);
-        if (savedModel) {
+        // Check if the saved model exists and is one of the valid options
+        if (savedModel && modelOptions.some(option => option.id === savedModel)) {
           setSelectedModel(savedModel);
+        } else if (savedModel) {
+          // If invalid model found in storage, clear it
+          localStorage.removeItem(STORAGE_KEY_MODEL);
+          console.log(`Removed invalid model '${savedModel}' from localStorage. Using default: ${DEFAULT_MODEL_ID}`);
         }
       } catch (error) {
         console.warn('Failed to load preferences from localStorage:', error);
       }
     }
   }, []);
-  
+
   useEffect(() => {
     if (autoFocus && textareaRef.current) {
       textareaRef.current.focus();
@@ -120,7 +135,7 @@ export const ChatInput = forwardRef<ChatInputHandles, ChatInputProps>(({
     };
 
     adjustHeight();
-    
+
     adjustHeight();
 
     window.addEventListener('resize', adjustHeight);
@@ -137,37 +152,44 @@ export const ChatInput = forwardRef<ChatInputHandles, ChatInputProps>(({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if ((!value.trim() && uploadedFiles.length === 0) || loading || (disabled && !isAgentRunning)) return;
-    
+
     if (isAgentRunning && onStopAgent) {
       onStopAgent();
       return;
     }
-    
+
     let message = value;
-    
+
     if (uploadedFiles.length > 0) {
-      const fileInfo = uploadedFiles.map(file => 
+      const fileInfo = uploadedFiles.map(file =>
         `[Uploaded File: ${file.path}]`
       ).join('\n');
       message = message ? `${message}\n\n${fileInfo}` : fileInfo;
     }
-    
+
     let baseModelName = selectedModel;
     let thinkingEnabled = false;
-    if (selectedModel === "sonnet-3.7-thinking") {
-      baseModelName = "sonnet-3.7";
+    if (selectedModel.endsWith("-thinking")) {
+      baseModelName = selectedModel.replace(/-thinking$/, "");
       thinkingEnabled = true;
     }
-    
-    onSubmit(message, {
-      model_name: baseModelName,
+
+    // Only include model_name in options if explicitly selected
+    const options: { model_name?: string; enable_thinking?: boolean } = {
       enable_thinking: thinkingEnabled
-    });
-    
+    };
+
+    // Only add model_name if it's explicitly set
+    if (baseModelName) {
+      options.model_name = baseModelName;
+    }
+
+    onSubmit(message, options);
+
     if (!isControlled) {
       setUncontrolledValue("");
     }
-    
+
     setUploadedFiles([]);
   };
 
@@ -211,11 +233,11 @@ export const ChatInput = forwardRef<ChatInputHandles, ChatInputProps>(({
     e.preventDefault();
     e.stopPropagation();
     setIsDraggingOver(false);
-    
+
     if (!e.dataTransfer.files || e.dataTransfer.files.length === 0) return;
-    
+
     const files = Array.from(e.dataTransfer.files);
-    
+
     if (sandboxId) {
       // If we have a sandboxId, upload files directly
       await uploadFiles(files);
@@ -227,9 +249,9 @@ export const ChatInput = forwardRef<ChatInputHandles, ChatInputProps>(({
 
   const processFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     if (!event.target.files || event.target.files.length === 0) return;
-    
+
     const files = Array.from(event.target.files);
-    
+
     if (sandboxId) {
       // If we have a sandboxId, upload files directly
       await uploadFiles(files);
@@ -237,7 +259,7 @@ export const ChatInput = forwardRef<ChatInputHandles, ChatInputProps>(({
       // Otherwise, store files locally
       handleLocalFiles(files);
     }
-    
+
     event.target.value = '';
   };
 
@@ -250,17 +272,17 @@ export const ChatInput = forwardRef<ChatInputHandles, ChatInputProps>(({
       }
       return true;
     });
-    
+
     // Store the files in pendingFiles state
     setPendingFiles(prevFiles => [...prevFiles, ...filteredFiles]);
-    
+
     // Also add to uploadedFiles for UI display
     const newUploadedFiles: UploadedFile[] = filteredFiles.map(file => ({
       name: file.name,
       path: `/workspace/${file.name}`, // This is just for display purposes
       size: file.size
     }));
-    
+
     setUploadedFiles(prev => [...prev, ...newUploadedFiles]);
     filteredFiles.forEach(file => {
       toast.success(`File attached: ${file.name} (pending upload)`);
@@ -270,28 +292,28 @@ export const ChatInput = forwardRef<ChatInputHandles, ChatInputProps>(({
   const uploadFiles = async (files: File[]) => {
     try {
       setIsUploading(true);
-      
+
       const newUploadedFiles: UploadedFile[] = [];
-      
+
       for (const file of files) {
         if (file.size > 50 * 1024 * 1024) {
           toast.error(`File size exceeds 50MB limit: ${file.name}`);
           continue;
         }
-        
+
         const formData = new FormData();
         formData.append('file', file);
-        
+
         const uploadPath = `/workspace/${file.name}`;
         formData.append('path', uploadPath);
-        
+
         const supabase = createClient();
         const { data: { session } } = await supabase.auth.getSession();
-        
+
         if (!session?.access_token) {
           throw new Error('No access token available');
         }
-        
+
         const response = await fetch(`${API_URL}/sandboxes/${sandboxId}/files`, {
           method: 'POST',
           headers: {
@@ -299,22 +321,22 @@ export const ChatInput = forwardRef<ChatInputHandles, ChatInputProps>(({
           },
           body: formData
         });
-        
+
         if (!response.ok) {
           throw new Error(`Upload failed: ${response.statusText}`);
         }
-        
+
         newUploadedFiles.push({
           name: file.name,
           path: uploadPath,
           size: file.size
         });
-        
+
         toast.success(`File uploaded: ${file.name}`);
       }
-      
+
       setUploadedFiles(prev => [...prev, ...newUploadedFiles]);
-      
+
     } catch (error) {
       console.error("File upload failed:", error);
       toast.error(typeof error === 'string' ? error : (error instanceof Error ? error.message : "Failed to upload file"));
@@ -333,18 +355,11 @@ export const ChatInput = forwardRef<ChatInputHandles, ChatInputProps>(({
     setUploadedFiles(prev => prev.filter((_, i) => i !== index));
   };
 
-  const modelOptions = [
-    { id: "sonnet-3.7", label: "Sonnet 3.7" },
-    { id: "sonnet-3.7-thinking", label: "Sonnet 3.7 (Thinking)" },
-    { id: "gpt-4.1", label: "GPT-4.1" },
-    { id: "gemini-flash-2.5", label: "Gemini Flash 2.5" }
-  ];
-
   return (
     <div className="mx-auto w-full max-w-3xl px-4 py-4">
       <AnimatePresence>
         {uploadedFiles.length > 0 && (
-          <motion.div 
+          <motion.div
             initial={{ opacity: 0, height: 0 }}
             animate={{ opacity: 1, height: 'auto' }}
             exit={{ opacity: 0, height: 0 }}
@@ -352,7 +367,7 @@ export const ChatInput = forwardRef<ChatInputHandles, ChatInputProps>(({
           >
             <div className="flex flex-wrap gap-1.5 max-h-20 overflow-y-auto">
               {uploadedFiles.map((file, index) => (
-                <motion.div 
+                <motion.div
                   key={index}
                   initial={{ opacity: 0, scale: 0.9 }}
                   animate={{ opacity: 1, scale: 1 }}
@@ -368,10 +383,10 @@ export const ChatInput = forwardRef<ChatInputHandles, ChatInputProps>(({
                     ({formatFileSize(file.size)})
                     {!sandboxId && <span className="ml-1 text-blue-500">(pending)</span>}
                   </span>
-                  <Button 
-                    type="button" 
-                    variant="ghost" 
-                    size="icon" 
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
                     className="h-4 w-4 rounded-full p-0 hover:bg-gray-200 dark:hover:bg-gray-700"
                     onClick={() => {
                       removeUploadedFile(index);
@@ -390,7 +405,7 @@ export const ChatInput = forwardRef<ChatInputHandles, ChatInputProps>(({
         )}
       </AnimatePresence>
 
-      <div 
+      <div
         className={cn(
           "flex items-end w-full rounded-lg border border-gray-200 dark:border-gray-900 bg-white dark:bg-black px-3 py-2 shadow-sm transition-all duration-200",
           isDraggingOver ? "border-blue-200 dark:border-blue-900 bg-blue-50/50 dark:bg-blue-950/10" : ""
@@ -414,7 +429,7 @@ export const ChatInput = forwardRef<ChatInputHandles, ChatInputProps>(({
             rows={1}
           />
         </div>
-        
+
         <div className="flex items-center gap-2 pl-2 flex-shrink-0">
           {/* {!isAgentRunning && (
             <TooltipProvider>
@@ -422,7 +437,7 @@ export const ChatInput = forwardRef<ChatInputHandles, ChatInputProps>(({
                 <TooltipTrigger asChild>
                   <Dialog>
                     <DialogTrigger asChild>
-                      <Button 
+                      <Button
                         variant="ghost"
                         size="icon"
                         className="h-8 w-8 rounded-md text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800"
@@ -435,8 +450,8 @@ export const ChatInput = forwardRef<ChatInputHandles, ChatInputProps>(({
                         <DialogTitle className="text-sm font-medium">Select Model</DialogTitle>
                       </DialogHeader>
                       <div className="p-4">
-                        <RadioGroup 
-                          defaultValue={selectedModel} 
+                        <RadioGroup
+                          defaultValue={selectedModel}
                           onValueChange={handleModelChange}
                           className="grid gap-2"
                         >
@@ -462,12 +477,12 @@ export const ChatInput = forwardRef<ChatInputHandles, ChatInputProps>(({
               </Tooltip>
             </TooltipProvider>
           )} */}
-          
+
           {!hideAttachments && (
             <TooltipProvider>
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <Button 
+                  <Button
                     type="button"
                     onClick={handleFileUpload}
                     variant="ghost"
@@ -488,7 +503,7 @@ export const ChatInput = forwardRef<ChatInputHandles, ChatInputProps>(({
               </Tooltip>
             </TooltipProvider>
           )}
-          
+
           <input
             type="file"
             ref={fileInputRef}
@@ -496,22 +511,22 @@ export const ChatInput = forwardRef<ChatInputHandles, ChatInputProps>(({
             onChange={processFileUpload}
             multiple
           />
-          
+
           <TooltipProvider>
             <Tooltip>
               <TooltipTrigger asChild>
-                <Button 
+                <Button
                   type="submit"
                   onClick={isAgentRunning ? onStopAgent : handleSubmit}
                   variant="ghost"
                   size="icon"
                   className={cn(
                     "h-8 w-8 rounded-md",
-                    isAgentRunning 
-                      ? "text-red-500 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-950/30" 
+                    isAgentRunning
+                      ? "text-red-500 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-950/30"
                       : "text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800",
-                    ((!value.trim() && uploadedFiles.length === 0) && !isAgentRunning) || loading || (disabled && !isAgentRunning) 
-                      ? "opacity-50" 
+                    ((!value.trim() && uploadedFiles.length === 0) && !isAgentRunning) || loading || (disabled && !isAgentRunning)
+                      ? "opacity-50"
                       : ""
                   )}
                   disabled={((!value.trim() && uploadedFiles.length === 0) && !isAgentRunning) || loading || (disabled && !isAgentRunning)}
@@ -534,7 +549,7 @@ export const ChatInput = forwardRef<ChatInputHandles, ChatInputProps>(({
       </div>
 
       {isAgentRunning && (
-        <motion.div 
+        <motion.div
           initial={{ opacity: 0, y: -10 }}
           animate={{ opacity: 1, y: 0 }}
           className="mt-2 w-full flex items-center justify-center"
@@ -550,4 +565,4 @@ export const ChatInput = forwardRef<ChatInputHandles, ChatInputProps>(({
 });
 
 // Set display name for the component
-ChatInput.displayName = 'ChatInput'; 
+ChatInput.displayName = 'ChatInput';

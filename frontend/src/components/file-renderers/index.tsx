@@ -8,6 +8,7 @@ import { PdfRenderer } from "./pdf-renderer";
 import { ImageRenderer } from "./image-renderer";
 import { BinaryRenderer } from "./binary-renderer";
 import { HtmlRenderer } from "./html-renderer";
+import { constructHtmlPreviewUrl } from "@/lib/utils/url";
 
 export type FileType = 
   | 'markdown'
@@ -120,7 +121,7 @@ export function FileRenderer({
   
   // Construct HTML file preview URL if we have a sandbox and the file is HTML
   const htmlPreviewUrl = (isHtmlFile && project?.sandbox?.sandbox_url && fileName) 
-    ? `${project.sandbox.sandbox_url}/${encodeURIComponent(fileName.replace(/^\/workspace\//, ''))}`
+    ? constructHtmlPreviewUrl(project.sandbox.sandbox_url, fileName)
     : blobHtmlUrl; // Use blob URL as fallback
   
   // Clean up blob URL on unmount

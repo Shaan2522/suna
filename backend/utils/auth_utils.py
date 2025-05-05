@@ -5,7 +5,7 @@ from jwt.exceptions import PyJWTError
 from utils.logger import logger
 
 # This function extracts the user ID from Supabase JWT
-async def get_current_user_id(request: Request) -> str:
+async def get_current_user_id_from_jwt(request: Request) -> str:
     """
     Extract and verify the user ID from the JWT in the Authorization header.
     
@@ -56,6 +56,45 @@ async def get_current_user_id(request: Request) -> str:
             headers={"WWW-Authenticate": "Bearer"}
         )
 
+async def get_account_id_from_thread(client, thread_id: str) -> str:
+    """
+    Extract and verify the account ID from the thread.
+    
+    Args:
+        client: The Supabase client
+        thread_id: The ID of the thread
+        
+    Returns:
+        str: The account ID associated with the thread
+        
+    Raises:
+        HTTPException: If the thread is not found or if there's an error
+    """
+    try:
+        response = await client.table('threads').select('account_id').eq('thread_id', thread_id).execute()
+        
+        if not response.data or len(response.data) == 0:
+            raise HTTPException(
+                status_code=404,
+                detail="Thread not found"
+            )
+        
+        account_id = response.data[0].get('account_id')
+        
+        if not account_id:
+            raise HTTPException(
+                status_code=500,
+                detail="Thread has no associated account"
+            )
+        
+        return account_id
+    
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error retrieving thread information: {str(e)}"
+        )
+    
 async def get_user_id_from_stream_auth(
     request: Request,
     token: Optional[str] = None
@@ -105,6 +144,7 @@ async def get_user_id_from_stream_auth(
         detail="No valid authentication credentials found",
         headers={"WWW-Authenticate": "Bearer"}
     )
+
 async def verify_thread_access(client, thread_id: str, user_id: str):
     """
     Verify that a user has access to a specific thread based on account membership.

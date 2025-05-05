@@ -24,6 +24,7 @@ interface ApiMessageType {
 // Define the structure returned by the hook
 export interface UseAgentStreamResult {
   status: string;
+  textContent: string;
   toolCall: ParsedContent | null;
   error: string | null;
   agentRunId: string | null; // Expose the currently managed agentRunId
@@ -33,12 +34,12 @@ export interface UseAgentStreamResult {
 
 // Define the callbacks the hook consumer can provide
 export interface AgentStreamCallbacks {
-  onMessage: (message: UnifiedMessage) => void; // For complete messages/non-assistant
-  onAssistantChunk: (chunk: { content: string; message_id: string | null }) => void; // NEW: Callback for assistant chunks
-  onAssistantStart: (initialMessage: UnifiedMessage) => void; // NEW: Callback when assistant stream starts
+  onMessage: (message: UnifiedMessage) => void; // Callback for complete messages
   onStatusChange?: (status: string) => void; // Optional: Notify on internal status changes
   onError?: (error: string) => void; // Optional: Notify on errors
   onClose?: (finalStatus: string) => void; // Optional: Notify when streaming definitively ends
+  onAssistantStart?: () => void; // Optional: Notify when assistant starts streaming
+  onAssistantChunk?: (chunk: { content: string }) => void; // Optional: Notify on each assistant message chunk
 }
 
 // Helper function to map API messages to UnifiedMessages
@@ -60,6 +61,7 @@ const mapApiMessagesToUnified = (messagesData: ApiMessageType[] | null | undefin
 export function useAgentStream(callbacks: AgentStreamCallbacks, threadId: string, setMessages: (messages: UnifiedMessage[]) => void): UseAgentStreamResult {
   const [agentRunId, setAgentRunId] = useState<string | null>(null);
   const [status, setStatus] = useState<string>('idle');
+  const [textContent, setTextContent] = useState<string>('');
   const [toolCall, setToolCall] = useState<ParsedContent | null>(null);
   const [error, setError] = useState<string | null>(null);
   
@@ -68,7 +70,6 @@ export function useAgentStream(callbacks: AgentStreamCallbacks, threadId: string
   const currentRunIdRef = useRef<string | null>(null); // Ref to track the run ID being processed
   const threadIdRef = useRef(threadId); // Ref to hold the current threadId
   const setMessagesRef = useRef(setMessages); // Ref to hold the setMessages function
-  const assistantMessageIdRef = useRef<string | null>(null); // Track the ID of the message being streamed
 
   // Update refs if threadId or setMessages changes
   useEffect(() => {
@@ -118,8 +119,8 @@ export function useAgentStream(callbacks: AgentStreamCallbacks, threadId: string
     }
     
     // Reset streaming-specific state
+    setTextContent('');
     setToolCall(null);
-    assistantMessageIdRef.current = null; // Ensure reset on finalize
     
     // Update status and clear run ID
     updateStatus(finalStatus);
@@ -196,59 +197,25 @@ export function useAgentStream(callbacks: AgentStreamCallbacks, threadId: string
     switch (message.type) {
       case 'assistant':
         if (parsedMetadata.stream_status === 'chunk' && parsedContent.content) {
-          if (assistantMessageIdRef.current === null) {
-             const tempId = message.message_id || `streaming-${Date.now()}`;
-             assistantMessageIdRef.current = tempId;
-             const initialMessage: UnifiedMessage = {
-                ...message,
-                message_id: tempId,
-                content: JSON.stringify({ role: 'assistant', content: '' }),
-                metadata: JSON.stringify({ ...parsedMetadata, stream_status: 'streaming' })
-             };
-             console.log('[useAgentStream] Assistant stream started, calling onAssistantStart with ID:', tempId);
-             callbacks.onAssistantStart(initialMessage);
-          }
-          callbacks.onAssistantChunk({
-             content: parsedContent.content,
-             message_id: assistantMessageIdRef.current
-          });
+          setTextContent(prev => prev + parsedContent.content);
+          callbacks.onAssistantChunk?.({ content: parsedContent.content });
         } else if (parsedMetadata.stream_status === 'complete') {
-          console.log('[useAgentStream] Received complete assistant message ID:', message.message_id);
+          setTextContent('');
           setToolCall(null);
-          if (message.message_id) {
-             callbacks.onMessage(message);
-          } else if (assistantMessageIdRef.current) {
-             console.warn('[useAgentStream] Complete message missing ID, using tracked ID:', assistantMessageIdRef.current);
-             callbacks.onMessage({ ...message, message_id: assistantMessageIdRef.current });
-          } else {
-              console.error('[useAgentStream] Received complete assistant message without an ID and no ID was tracked.');
-          }
-          assistantMessageIdRef.current = null;
+          if (message.message_id) callbacks.onMessage(message);
         } else if (!parsedMetadata.stream_status) {
-           assistantMessageIdRef.current = null;
-           console.log('[useAgentStream] Received non-chunked assistant message ID:', message.message_id);
+           // Handle non-chunked assistant messages if needed
+           callbacks.onAssistantStart?.();
            if (message.message_id) callbacks.onMessage(message);
         }
         break;
       case 'tool':
-        assistantMessageIdRef.current = null;
-        setToolCall(null);
-        console.log('[useAgentStream] Received tool message ID:', message.message_id);
+        setToolCall(null); // Clear any streaming tool call
         if (message.message_id) callbacks.onMessage(message);
         break;
       case 'status':
-        if (parsedContent.status_type === 'thread_run_end' || parsedContent.status_type === 'finish' || parsedContent.status_type === 'error') {
-            if(assistantMessageIdRef.current) {
-                console.log(`[useAgentStream] Resetting assistantMessageIdRef due to status: ${parsedContent.status_type}`);
-                assistantMessageIdRef.current = null;
-            }
-        }
         switch (parsedContent.status_type) {
           case 'tool_started':
-            if(assistantMessageIdRef.current) {
-                console.log('[useAgentStream] Resetting assistantMessageIdRef due to tool_started');
-                assistantMessageIdRef.current = null;
-            }
             setToolCall({
               role: 'assistant',
               status_type: 'tool_started',
@@ -269,27 +236,30 @@ export function useAgentStream(callbacks: AgentStreamCallbacks, threadId: string
             console.log('[useAgentStream] Received thread run end status, finalizing.');
             break;
            case 'finish':
+               // Optional: Handle finish reasons like 'xml_tool_limit_reached'
                console.log('[useAgentStream] Received finish status:', parsedContent.finish_reason);
+               // Don't finalize here, wait for thread_run_end or completion message
                break;
            case 'error':
                console.error('[useAgentStream] Received error status message:', parsedContent.message);
                setError(parsedContent.message || 'Agent run failed');
                finalizeStream('error', currentRunIdRef.current);
                break;
+           // Ignore thread_run_start, assistant_response_start etc. for now
            default:
+              // console.debug('[useAgentStream] Received unhandled status type:', parsedContent.status_type);
               break;
         }
         break;
       case 'user':
       case 'system':
-        assistantMessageIdRef.current = null;
+        // Handle other message types if necessary, e.g., if backend sends historical context
         if (message.message_id) callbacks.onMessage(message);
         break;
       default:
-        assistantMessageIdRef.current = null;
         console.warn('[useAgentStream] Unhandled message type:', message.type);
     }
-  }, [status, toolCall, callbacks, finalizeStream, updateStatus]);
+  }, [threadId, setMessages, status, toolCall, callbacks, finalizeStream, updateStatus]);
 
   const handleStreamError = useCallback((err: Error | string | Event) => {
     if (!isMountedRef.current) return;
@@ -426,11 +396,11 @@ export function useAgentStream(callbacks: AgentStreamCallbacks, threadId: string
       }
        // Reset state on unmount if needed, though finalizeStream should handle most cases
        setStatus('idle');
+       setTextContent('');
        setToolCall(null);
        setError(null);
        setAgentRunId(null);
        currentRunIdRef.current = null;
-       assistantMessageIdRef.current = null; // Reset assistant tracking on unmount
     };
   }, []); // Empty dependency array for mount/unmount effect
 
@@ -448,9 +418,9 @@ export function useAgentStream(callbacks: AgentStreamCallbacks, threadId: string
      }
      
      // Reset state before starting
+     setTextContent('');
      setToolCall(null);
      setError(null);
-     assistantMessageIdRef.current = null; // Reset assistant tracking
      updateStatus('connecting');
      setAgentRunId(runId);
      currentRunIdRef.current = runId; // Set the ref immediately
@@ -515,6 +485,7 @@ export function useAgentStream(callbacks: AgentStreamCallbacks, threadId: string
 
   return {
     status,
+    textContent,
     toolCall,
     error,
     agentRunId,

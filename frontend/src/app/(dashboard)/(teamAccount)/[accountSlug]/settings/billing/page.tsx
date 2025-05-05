@@ -2,7 +2,7 @@
 
 import React from 'react';
 import {createClient} from "@/lib/supabase/server";
-import AccountBillingStatus from "@/components/basejump/account-billing-status";
+import AccountBillingStatus from "@/components/billing/account-billing-status";
 import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
 
 const returnUrl = process.env.NEXT_PUBLIC_URL as string;

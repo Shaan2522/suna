@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button';
 import {
   ArrowDown, CheckCircle, CircleDashed, AlertTriangle, Info, File, ChevronRight
 } from 'lucide-react';
-import { addUserMessage, getMessages, startAgent, stopAgent, getAgentRuns, getProject, getThread, updateProject, Project, Message as BaseApiMessageType } from '@/lib/api';
+import { addUserMessage, getMessages, startAgent, stopAgent, getAgentRuns, getProject, getThread, updateProject, Project, Message as BaseApiMessageType, BillingError, checkBillingStatus } from '@/lib/api';
 import { toast } from 'sonner';
 import { Skeleton } from "@/components/ui/skeleton";
 import { ChatInput } from '@/components/thread/chat-input';
@@ -20,9 +20,8 @@ import { Markdown } from '@/components/ui/markdown';
 import { cn } from "@/lib/utils";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { BillingErrorAlert } from '@/components/billing/usage-limit-alert';
-import { SUBSCRIPTION_PLANS } from '@/components/billing/plan-comparison';
-import { createClient } from '@/lib/supabase/client';
 import { isLocalMode } from "@/lib/config";
+
 
 import { UnifiedMessage, ParsedContent, ParsedMetadata, ThreadParams } from '@/components/thread/types';
 import { getToolIcon, extractPrimaryParam, safeJsonParse } from '@/components/thread/utils';
@@ -217,7 +216,6 @@ export default function ThreadPage({ params }: { params: Promise<ThreadParams> }
   const [currentToolIndex, setCurrentToolIndex] = useState<number>(0);
   const [autoOpenedPanel, setAutoOpenedPanel] = useState(false);
   const [initialPanelOpenAttempted, setInitialPanelOpenAttempted] = useState(false);
-  const [streamingMessageId, setStreamingMessageId] = useState<string | null>(null);
   
   // Billing alert state
   const [showBillingAlert, setShowBillingAlert] = useState(false);
@@ -225,7 +223,7 @@ export default function ThreadPage({ params }: { params: Promise<ThreadParams> }
     currentUsage?: number;
     limit?: number;
     message?: string;
-    accountId?: string;
+    accountId?: string | null;
   }>({});
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -337,84 +335,27 @@ export default function ThreadPage({ params }: { params: Promise<ThreadParams> }
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [toggleSidePanel, isSidePanelOpen, leftSidebarState, setLeftSidebarOpen]);
 
-  // Callback for when assistant stream starts
-  const handleAssistantStreamStart = useCallback((initialMessage: UnifiedMessage) => {
-    console.log('[PAGE] Assistant stream started. Adding placeholder message:', initialMessage.message_id);
-    setMessages(prev => {
-      // Avoid adding duplicates if reconnect happens quickly
-      if (prev.some(m => m.message_id === initialMessage.message_id)) {
-        return prev;
-      }
-      return [...prev, initialMessage];
-    });
-    setStreamingMessageId(initialMessage.message_id);
-    if (!userHasScrolled) scrollToBottom('smooth'); // Scroll down when assistant starts
-  }, [userHasScrolled]);
-
-  // Callback for receiving assistant message chunks
-  const handleAssistantStreamChunk = useCallback(({ content: chunkContent, message_id }: { content: string; message_id: string | null }) => {
-    if (!message_id) {
-       console.warn("[PAGE] Received assistant chunk without a message_id. Cannot update state.");
-       return;
-    }
-    setMessages(prevMessages => {
-      // Find the index of the message being streamed
-      const msgIndex = prevMessages.findIndex(m => m.message_id === message_id);
-
-      if (msgIndex === -1) {
-        console.warn(`[PAGE] Could not find message with ID ${message_id} to append chunk.`);
-        // Optionally: Could try adding a new message if not found, but might indicate a logic error
-        return prevMessages;
-      }
-
-      // Create a new array with the updated message
-      return prevMessages.map((msg, index) => {
-        if (index === msgIndex) {
-          // Parse the existing content
-          const existingParsedContent = safeJsonParse<ParsedContent>(msg.content, { role: 'assistant', content: '' });
-          // Append the new chunk to the inner content string
-          const newInnerContent = (existingParsedContent.content || '') + chunkContent;
-          // Create the updated content object and stringify it
-          const updatedContentObject: ParsedContent = { ...existingParsedContent, content: newInnerContent };
-          return {
-            ...msg,
-            content: JSON.stringify(updatedContentObject),
-            updated_at: new Date().toISOString() // Update timestamp
-          };
-        }
-        return msg;
-      });
-    });
-    // Continuously scroll if user hasn't manually scrolled up
-    if (!userHasScrolled) scrollToBottom('auto'); // Use 'auto' for potentially smoother streaming scroll
-  }, [userHasScrolled]);
-
-  // Callback for receiving complete messages (Handles the final update)
   const handleNewMessageFromStream = useCallback((message: UnifiedMessage) => {
-    console.log(`[PAGE - onMessage] Received complete message: ID=${message.message_id}, Type=${message.type}`);
+    // Log the ID of the message received from the stream
+    console.log(`[STREAM HANDLER] Received message: ID=${message.message_id}, Type=${message.type}`);
+    if (!message.message_id) {
+        console.warn(`[STREAM HANDLER] Received message is missing ID: Type=${message.type}, Content=${message.content?.substring(0, 50)}...`);
+    }
+    
     setMessages(prev => {
       const messageExists = prev.some(m => m.message_id === message.message_id);
-      // Update existing message (especially the final assistant one) or add new (e.g., tool result)
       if (messageExists) {
-        console.log(`[PAGE - onMessage] Updating existing message ID: ${message.message_id}`);
         return prev.map(m => m.message_id === message.message_id ? message : m);
       } else {
-        console.log(`[PAGE - onMessage] Adding new message ID: ${message.message_id}`);
         return [...prev, message];
       }
     });
-    // If we received the final assistant message, clear the streaming ID
-    if (message.message_id === streamingMessageId && message.type === 'assistant') {
-      console.log(`[PAGE - onMessage] Finalizing streaming for message ID: ${streamingMessageId}`);
-      setStreamingMessageId(null);
-    }
-    // Reset auto-opened panel state if needed (e.g., after tool message)
+
+    // If we received a tool message, refresh the tool panel
     if (message.type === 'tool') {
       setAutoOpenedPanel(false);
     }
-    // Scroll to bottom for final messages
-    if (!userHasScrolled) scrollToBottom('smooth');
-  }, [streamingMessageId, userHasScrolled]);
+  }, []);
 
   const handleStreamStatusChange = useCallback((hookStatus: string) => {
     console.log(`[PAGE] Hook status changed: ${hookStatus}`);
@@ -429,16 +370,11 @@ export default function ThreadPage({ params }: { params: Promise<ThreadParams> }
         setAgentRunId(null);
         // Reset auto-opened state when agent completes to trigger tool detection
         setAutoOpenedPanel(false);
-        // Ensure streaming ID is cleared if hook terminates unexpectedly
-        if (streamingMessageId) {
-          console.log('[PAGE] Clearing streamingMessageId due to hook termination.');
-          setStreamingMessageId(null);
-        }
         
         // After terminal states, we should scroll to bottom to show latest messages
         // The hook will already have refetched messages by this point
         if (['completed', 'stopped', 'agent_not_running', 'error', 'failed'].includes(hookStatus)) {
-           if (!userHasScrolled) scrollToBottom('smooth');
+          scrollToBottom('smooth');
         }
         break;
       case 'connecting':
@@ -448,7 +384,7 @@ export default function ThreadPage({ params }: { params: Promise<ThreadParams> }
         setAgentStatus('running');
         break;
     }
-  }, [streamingMessageId, userHasScrolled]);
+  }, []);
 
   const handleStreamError = useCallback((errorMessage: string) => {
     console.error(`[PAGE] Stream hook error: ${errorMessage}`);
@@ -456,24 +392,15 @@ export default function ThreadPage({ params }: { params: Promise<ThreadParams> }
         !errorMessage.toLowerCase().includes('agent run is not running')) {
         toast.error(`Stream Error: ${errorMessage}`);
     }
-    // Ensure streaming ID is cleared on error
-    if (streamingMessageId) {
-      console.log('[PAGE] Clearing streamingMessageId due to stream error.');
-      setStreamingMessageId(null);
-    }
-  }, [streamingMessageId]);
+  }, []);
   
   const handleStreamClose = useCallback(() => {
       console.log(`[PAGE] Stream hook closed with final status: ${agentStatus}`);
-      // Ensure streaming ID is cleared when stream closes
-      if (streamingMessageId) {
-         console.log('[PAGE] Clearing streamingMessageId due to stream close.');
-         setStreamingMessageId(null);
-      }
-  }, [agentStatus, streamingMessageId]);
+  }, [agentStatus]);
 
   const {
     status: streamHookStatus,
+    textContent: streamingTextContent,
     toolCall: streamingToolCall,
     error: streamError,
     agentRunId: currentHookRunId,
@@ -481,8 +408,6 @@ export default function ThreadPage({ params }: { params: Promise<ThreadParams> }
     stopStreaming,
   } = useAgentStream({
     onMessage: handleNewMessageFromStream,
-    onAssistantStart: handleAssistantStreamStart,
-    onAssistantChunk: handleAssistantStreamChunk,
     onStatusChange: handleStreamStatusChange,
     onError: handleStreamError,
     onClose: handleStreamClose,
@@ -539,7 +464,7 @@ export default function ThreadPage({ params }: { params: Promise<ThreadParams> }
           const messagesData = await getMessages(threadId);
           if (isMounted) {
             // Log raw messages fetched from API
-            console.log('[PAGE] Raw messages fetched:', messagesData?.length);
+            console.log('[PAGE] Raw messages fetched:', messagesData);
             
             // Map API message type to UnifiedMessage type
             const unifiedMessages = (messagesData || [])
@@ -552,12 +477,19 @@ export default function ThreadPage({ params }: { params: Promise<ThreadParams> }
                   console.warn(`[MAP ${index}] Non-status message fetched from API is missing ID: Type=${msg.type}`);
                 }
                 const threadIdMapped = msg.thread_id || threadId;
+                console.log(`[MAP ${index}] Accessed msg.thread_id (using fallback):`, threadIdMapped);
                 const typeMapped = (msg.type || 'system') as UnifiedMessage['type'];
+                console.log(`[MAP ${index}] Accessed msg.type (using fallback):`, typeMapped);
                 const isLlmMessageMapped = Boolean(msg.is_llm_message);
+                console.log(`[MAP ${index}] Accessed msg.is_llm_message:`, isLlmMessageMapped);
                 const contentMapped = msg.content || '';
+                console.log(`[MAP ${index}] Accessed msg.content (using fallback):`, contentMapped.substring(0, 50) + '...');
                 const metadataMapped = msg.metadata || '{}';
+                console.log(`[MAP ${index}] Accessed msg.metadata (using fallback):`, metadataMapped);
                 const createdAtMapped = msg.created_at || new Date().toISOString();
+                console.log(`[MAP ${index}] Accessed msg.created_at (using fallback):`, createdAtMapped);
                 const updatedAtMapped = msg.updated_at || new Date().toISOString();
+                console.log(`[MAP ${index}] Accessed msg.updated_at (using fallback):`, updatedAtMapped);
 
                 return {
                   message_id: messageId || null, 
@@ -572,7 +504,29 @@ export default function ThreadPage({ params }: { params: Promise<ThreadParams> }
             });
             
             setMessages(unifiedMessages); // Set the filtered and mapped messages
-            console.log('[PAGE] Loaded Messages (excluding status):', unifiedMessages.length)
+            console.log('[PAGE] Loaded Messages (excluding status, keeping browser_state):', unifiedMessages.length)
+            
+            // Debug loaded messages
+            const assistantMessages = unifiedMessages.filter(m => m.type === 'assistant');
+            const toolMessages = unifiedMessages.filter(m => m.type === 'tool');
+            
+            console.log('[PAGE] Assistant messages:', assistantMessages.length);
+            console.log('[PAGE] Tool messages:', toolMessages.length);
+            
+            // Check if tool messages have associated assistant messages
+            toolMessages.forEach(toolMsg => {
+              try {
+                const metadata = JSON.parse(toolMsg.metadata);
+                if (metadata.assistant_message_id) {
+                  const hasAssociated = assistantMessages.some(
+                    assMsg => assMsg.message_id === metadata.assistant_message_id
+                  );
+                  console.log(`[PAGE] Tool message ${toolMsg.message_id} references assistant ${metadata.assistant_message_id} - found: ${hasAssociated}`);
+                }
+              } catch (e) {
+                console.error("Error parsing tool message metadata:", e);
+              }
+            });
             
             messagesLoadedRef.current = true;
             if (!hasInitiallyScrolled.current) {
@@ -649,27 +603,57 @@ export default function ThreadPage({ params }: { params: Promise<ThreadParams> }
         startAgent(threadId, options)
       ]);
 
+      // Handle failure to add the user message
       if (results[0].status === 'rejected') {
-        console.error("Failed to send message:", results[0].reason);
-        throw new Error(`Failed to send message: ${results[0].reason?.message || results[0].reason}`);
+        const reason = results[0].reason;
+        console.error("Failed to send message:", reason);
+        throw new Error(`Failed to send message: ${reason?.message || reason}`);
       }
 
+      // Handle failure to start the agent
       if (results[1].status === 'rejected') {
-        console.error("Failed to start agent:", results[1].reason);
-        throw new Error(`Failed to start agent: ${results[1].reason?.message || results[1].reason}`);
+        const error = results[1].reason;
+        console.error("Failed to start agent:", error);
+
+        // Check if it's our custom BillingError (402)
+        if (error instanceof BillingError) {
+          console.log("Caught BillingError:", error.detail);
+          // Extract billing details
+          setBillingData({
+            // Note: currentUsage and limit might not be in the detail from the backend yet
+            currentUsage: error.detail.currentUsage as number | undefined,
+            limit: error.detail.limit as number | undefined,
+            message: error.detail.message || 'Monthly usage limit reached. Please upgrade.', // Use message from error detail
+            accountId: project?.account_id || null // Pass account ID
+          });
+          setShowBillingAlert(true);
+          
+          // Remove the optimistic message since the agent couldn't start
+          setMessages(prev => prev.filter(m => m.message_id !== optimisticUserMessage.message_id));
+          return; // Stop further execution in this case
+        }
+        
+        // Handle other agent start errors
+        throw new Error(`Failed to start agent: ${error?.message || error}`);
       }
 
+      // If agent started successfully
       const agentResult = results[1].value;
       setAgentRunId(agentResult.agent_run_id);
 
     } catch (err) {
+      // Catch errors from addUserMessage or non-BillingError agent start errors
       console.error('Error sending message or starting agent:', err);
-      toast.error(err instanceof Error ? err.message : 'Operation failed');
+      // Don't show billing alert here, only for specific BillingError
+      if (!(err instanceof BillingError)) {
+        toast.error(err instanceof Error ? err.message : 'Operation failed');
+      }
+      // Ensure optimistic message is removed on any error during submit
       setMessages(prev => prev.filter(m => m.message_id !== optimisticUserMessage.message_id));
     } finally {
       setIsSending(false);
     }
-  }, [threadId]);
+  }, [threadId, project?.account_id]); // Ensure project.account_id is a dependency
 
   const handleStopAgent = useCallback(async () => {
     console.log(`[PAGE] Requesting agent stop via hook.`);
@@ -690,9 +674,9 @@ export default function ThreadPage({ params }: { params: Promise<ThreadParams> }
     setUserHasScrolled(isScrolledUp);
   };
 
-  const scrollToBottom = useCallback((behavior: ScrollBehavior = 'smooth') => {
+  const scrollToBottom = (behavior: ScrollBehavior = 'smooth') => {
     messagesEndRef.current?.scrollIntoView({ behavior });
-  }, []);
+  };
 
   useEffect(() => {
     const lastMsg = messages[messages.length - 1];
@@ -710,7 +694,7 @@ export default function ThreadPage({ params }: { params: Promise<ThreadParams> }
     );
     observer.observe(latestMessageRef.current);
     return () => observer.disconnect();
-  }, [messages, streamingToolCall, setShowScrollButton]);
+  }, [messages, streamingTextContent, streamingToolCall, setShowScrollButton]);
 
   const handleScrollButtonClick = () => {
     scrollToBottom('smooth');
@@ -718,7 +702,7 @@ export default function ThreadPage({ params }: { params: Promise<ThreadParams> }
   };
 
   useEffect(() => {
-    console.log(`[PAGE] 🔄 Page AgentStatus: ${agentStatus}, Hook Status: ${streamHookStatus}, Target RunID: ${agentRunId || 'none'}, Hook RunID: ${currentHookRunId || 'none'}, StreamingMsgID: ${streamingMessageId || 'none'}`);
+    console.log(`[PAGE] 🔄 Page AgentStatus: ${agentStatus}, Hook Status: ${streamHookStatus}, Target RunID: ${agentRunId || 'none'}, Hook RunID: ${currentHookRunId || 'none'}`);
     
     // If the stream hook reports completion/stopping but our UI hasn't updated
     if ((streamHookStatus === 'completed' || streamHookStatus === 'stopped' || 
@@ -729,7 +713,7 @@ export default function ThreadPage({ params }: { params: Promise<ThreadParams> }
       setAgentRunId(null);
       setAutoOpenedPanel(false);
     }
-  }, [agentStatus, streamHookStatus, agentRunId, currentHookRunId, streamingMessageId]);
+  }, [agentStatus, streamHookStatus, agentRunId, currentHookRunId]);
 
   const handleOpenFileViewer = useCallback((filePath?: string) => {
     if (filePath) {
@@ -987,7 +971,7 @@ export default function ThreadPage({ params }: { params: Promise<ThreadParams> }
     
     setCurrentToolIndex(0);
     setIsSidePanelOpen(true);
-  }, [isSidePanelOpen]);
+  }, []);
 
   // SEO title update
   useEffect(() => {
@@ -1014,15 +998,6 @@ export default function ThreadPage({ params }: { params: Promise<ThreadParams> }
     }
   }, [projectName]);
 
-  // POLLING FOR MESSAGES - Keep disabled for now, let the stream hook handle final refetch
-  // useEffect(() => {
-  //   const fetchMessages = async () => { /* ... */ };
-  //   if (initialLoadCompleted.current && !pollingIntervalRef.current) {
-  //     fetchMessages();
-  //     pollingIntervalRef.current = setInterval(fetchMessages, 2000);
-  //   }
-  //   return () => { /* cleanup interval */ };
-  // }, [threadId, userHasScrolled, initialLoadCompleted]);
 
   // Add another useEffect to ensure messages are refreshed when agent status changes to idle
   useEffect(() => {
@@ -1057,129 +1032,69 @@ export default function ThreadPage({ params }: { params: Promise<ThreadParams> }
           }).catch(err => {
             console.error('Error in backup message refetch:', err);
           });
-        }, 500); // Shortened delay
+        }, 1000);
         
         return () => clearTimeout(timer);
       }
     }
   }, [agentStatus, threadId, isLoading, streamHookStatus]);
 
-  // Check billing status when agent completes
-  const checkBillingStatus = useCallback(async () => {
+  // Update the checkBillingStatus function
+  const checkBillingLimits = useCallback(async () => {
     // Skip billing checks in local development mode
     if (isLocalMode()) {
       console.log("Running in local development mode - billing checks are disabled");
       return false;
     }
 
-    if (!project?.account_id) return;
-    
-    const supabase = createClient();
-    
     try {
-      // Check subscription status
-      const { data: subscriptionData } = await supabase
-        .schema('basejump')
-        .from('billing_subscriptions')
-        .select('price_id')
-        .eq('account_id', project.account_id)
-        .eq('status', 'active')
-        .single();
+      const result = await checkBillingStatus();
       
-      const currentPlanId = subscriptionData?.price_id || SUBSCRIPTION_PLANS.FREE;
-      
-      // Only check usage limits for free tier users
-      if (currentPlanId === SUBSCRIPTION_PLANS.FREE) {
-        // Calculate usage
-        const startOfMonth = new Date();
-        startOfMonth.setDate(1);
-        startOfMonth.setHours(0, 0, 0, 0);
-        
-        // Get threads for this account
-        const { data: threadsData } = await supabase
-          .from('threads')
-          .select('thread_id')
-          .eq('account_id', project.account_id);
-        
-        const threadIds = threadsData?.map(t => t.thread_id) || [];
-        
-        // Get agent runs for those threads
-        const { data: agentRunData } = await supabase
-          .from('agent_runs')
-          .select('started_at, completed_at')
-          .in('thread_id', threadIds)
-          .gte('started_at', startOfMonth.toISOString());
-        
-        let totalSeconds = 0;
-        if (agentRunData) {
-          totalSeconds = agentRunData.reduce((acc, run) => {
-            const start = new Date(run.started_at);
-            const end = run.completed_at ? new Date(run.completed_at) : new Date();
-            const seconds = (end.getTime() - start.getTime()) / 1000;
-            return acc + seconds;
-          }, 0);
-        }
-        
-        // Convert to hours for display
-        const hours = totalSeconds / 3600;
-        const minutesUsed = totalSeconds / 60;
-        
-        // The free plan has a 10 minute limit as defined in backend/utils/billing.py
-        const FREE_PLAN_LIMIT_MINUTES = 10;
-        const FREE_PLAN_LIMIT_HOURS = FREE_PLAN_LIMIT_MINUTES / 60;
-        
-        // Show alert if over limit
-        if (minutesUsed > FREE_PLAN_LIMIT_MINUTES) {
-          console.log("Usage limit exceeded:", {
-            minutesUsed,
-            hoursUsed: hours,
-            limit: FREE_PLAN_LIMIT_MINUTES
-          });
-          setBillingData({
-            currentUsage: Number(hours.toFixed(2)),
-            limit: FREE_PLAN_LIMIT_HOURS,
-            message: `You've used ${Math.floor(minutesUsed)} minutes on the Free plan. The limit is ${FREE_PLAN_LIMIT_MINUTES} minutes per month.`,
-            accountId: project.account_id
-          });
-          setShowBillingAlert(true);
-          return true; // Return true if over limit
-        }
+      if (!result.can_run) {
+        setBillingData({
+          currentUsage: result.subscription?.minutes_limit || 0,
+          limit: result.subscription?.minutes_limit || 0,
+          message: result.message || 'Usage limit reached',
+          accountId: project?.account_id || null
+        });
+        setShowBillingAlert(true);
+        return true;
       }
-      return false; // Return false if not over limit
+      return false;
     } catch (err) {
       console.error('Error checking billing status:', err);
       return false;
     }
   }, [project?.account_id]);
 
-  // Update useEffect to check billing when agent completes
+  // Update useEffect to use the renamed function
   useEffect(() => {
     const previousStatus = previousAgentStatus.current;
     
     // Check if agent just completed (status changed from running to idle)
     if (previousStatus === 'running' && agentStatus === 'idle') {
-      checkBillingStatus();
+      checkBillingLimits();
     }
     
     // Store current status for next comparison
     previousAgentStatus.current = agentStatus;
-  }, [agentStatus, checkBillingStatus]);
+  }, [agentStatus, checkBillingLimits]);
 
-  // Add new useEffect to check billing limits when page first loads or project changes
+  // Update other useEffect to use the renamed function
   useEffect(() => {
     if (project?.account_id && initialLoadCompleted.current) {
       console.log("Checking billing status on page load");
-      checkBillingStatus();
+      checkBillingLimits();
     }
-  }, [project?.account_id, checkBillingStatus, initialLoadCompleted]);
-  
-  // Also check after messages are loaded to ensure we have the complete state
+  }, [project?.account_id, checkBillingLimits, initialLoadCompleted]);
+
+  // Update the last useEffect to use the renamed function
   useEffect(() => {
     if (messagesLoadedRef.current && project?.account_id && !isLoading) {
       console.log("Checking billing status after messages loaded");
-      checkBillingStatus();
+      checkBillingLimits();
     }
-  }, [messagesLoadedRef.current, checkBillingStatus, project?.account_id, isLoading]);
+  }, [messagesLoadedRef.current, checkBillingLimits, project?.account_id, isLoading]);
 
   if (isLoading && !initialLoadCompleted.current) {
     return (
@@ -1306,11 +1221,15 @@ export default function ThreadPage({ params }: { params: Promise<ThreadParams> }
           />
           <div className="flex flex-1 items-center justify-center p-4">
             <div className="flex w-full max-w-md flex-col items-center gap-4 rounded-lg border bg-card p-6 text-center">
-              <h2 className="text-lg font-semibold text-destructive">Error</h2>
-              <p className="text-sm text-muted-foreground">{error}</p>
-              <Button variant="outline" onClick={() => router.push(`/projects/${project?.id || ''}`)}>
-                Back to Project
-              </Button>
+              <div className="rounded-full bg-destructive/10 p-3">
+                <AlertTriangle className="h-6 w-6 text-destructive" />
+              </div>
+              <h2 className="text-lg font-semibold text-destructive">Thread Not Found</h2>
+              <p className="text-sm text-muted-foreground">
+                {error.includes('JSON object requested, multiple (or no) rows returned') 
+                  ? 'This thread either does not exist or you do not have access to it.'
+                  : error}
+              </p>
             </div>
           </div>
         </div>
@@ -1345,7 +1264,7 @@ export default function ThreadPage({ params }: { params: Promise<ThreadParams> }
           onScroll={handleScroll}
         >
           <div className="mx-auto max-w-3xl">
-            {messages.length === 0 && !streamingToolCall && agentStatus === 'idle' ? (
+            {messages.length === 0 && !streamingTextContent && !streamingToolCall && agentStatus === 'idle' ? (
               <div className="flex h-full items-center justify-center">
                 <div className="text-center text-muted-foreground">Send a message to start.</div>
               </div>
@@ -1425,7 +1344,7 @@ export default function ThreadPage({ params }: { params: Promise<ThreadParams> }
                               )}
                               
                               {/* Use the helper function to render user attachments */}
-                              {renderAttachments(attachments, handleOpenFileViewer)}
+                              {renderAttachments(attachments as string[], handleOpenFileViewer)}
                             </div>
                           </div>
                         </div>
@@ -1440,67 +1359,113 @@ export default function ThreadPage({ params }: { params: Promise<ThreadParams> }
                             <div className="flex-1">
                               <div className="inline-flex max-w-[90%] rounded-lg bg-muted/5 px-4 py-3 text-sm">
                                 <div className="space-y-2">
-                                  {/* --- START: Updated Assistant Message Rendering --- */}
-                                  {group.messages.map((message, msgIndex) => {
-                                    if (message.type === 'assistant') {
-                                      const parsedContent = safeJsonParse<ParsedContent>(message.content, { content: '' });
-                                      const msgKey = message.message_id || `submsg-assistant-${msgIndex}`;
+                                  {(() => {
+                                    const toolResultsMap = new Map<string | null, UnifiedMessage[]>();
+                                    group.messages.forEach(msg => {
+                                      if (msg.type === 'tool') {
+                                        const meta = safeJsonParse<ParsedMetadata>(msg.metadata, {});
+                                        const assistantId = meta.assistant_message_id || null;
+                                        if (!toolResultsMap.has(assistantId)) {
+                                          toolResultsMap.set(assistantId, []);
+                                        }
+                                        toolResultsMap.get(assistantId)?.push(msg);
+                                      }
+                                    });
+                                    
+                                    const renderedToolResultIds = new Set<string>();
+                                    const elements: React.ReactNode[] = [];
 
-                                      // Don't render empty non-streaming messages
-                                      if (!parsedContent.content && message.message_id !== streamingMessageId) return null;
+                                    group.messages.forEach((message, msgIndex) => {
+                                      if (message.type === 'assistant') {
+                                        const parsedContent = safeJsonParse<ParsedContent>(message.content, {});
+                                        const msgKey = message.message_id || `submsg-assistant-${msgIndex}`;
 
-                                      // Render the content using Markdown, which will now update incrementally
-                                      const renderedContent = renderMarkdownContent(
-                                        parsedContent.content || '', // Pass the accumulated content
-                                        handleToolClick,
-                                        message.message_id,
-                                        handleOpenFileViewer
-                                      );
+                                        if (!parsedContent.content) return;
 
-                                      // Check if this is the message currently being streamed
-                                      const isStreamingThisMessage = message.message_id === streamingMessageId;
+                                        const renderedContent = renderMarkdownContent(
+                                          parsedContent.content, 
+                                          handleToolClick, 
+                                          message.message_id,
+                                          handleOpenFileViewer
+                                        );
 
-                                      return (
-                                        <div key={msgKey} className={msgIndex > 0 && group.messages[msgIndex-1]?.type === 'assistant' ? "mt-2" : ""}>
-                                          <div className="prose prose-sm dark:prose-invert chat-markdown max-w-none [&>:first-child]:mt-0 prose-headings:mt-3">
-                                            {renderedContent}
-                                            {/* Add the blinking cursor ONLY to the currently streaming message */}
-                                            {isStreamingThisMessage && (streamHookStatus === 'streaming' || streamHookStatus === 'connecting') && (
-                                              <span className="inline-block h-4 w-0.5 bg-primary ml-0.5 -mb-1 animate-pulse" />
-                                            )}
+                                        elements.push(
+                                          <div key={msgKey} className={msgIndex > 0 ? "mt-2" : ""}>
+                                            <div className="prose prose-sm dark:prose-invert chat-markdown max-w-none [&>:first-child]:mt-0 prose-headings:mt-3">
+                                              {renderedContent}
+                                            </div>
                                           </div>
-                                        </div>
-                                      );
-                                    }
-                                    // Skip rendering tool messages directly here, they are handled via tool buttons inside assistant messages
-                                    return null;
-                                  })}
-                                  {/* --- END: Updated Assistant Message Rendering --- */}
+                                        );
+                                      }
+                                    });
 
-                                  {/* Render streaming tool call indicator if needed (e.g., <execute-command>...) */}
-                                  {groupIndex === groupedMessages.length - 1 && streamingToolCall && (streamHookStatus === 'streaming' || streamHookStatus === 'connecting') && (
-                                       <div className="mt-2 mb-1">
-                                         {(() => {
-                                           const toolName = streamingToolCall.name || streamingToolCall.xml_tag_name || 'Tool';
-                                           const IconComponent = getToolIcon(toolName);
-                                           const paramDisplay = extractPrimaryParam(toolName, streamingToolCall.arguments || '');
-                                           // Don't render the streaming tool indicator if the text content is already showing it
-                                           const hideToolIndicator = streamingMessageId && HIDE_STREAMING_XML_TAGS.has(toolName);
-                                           if (hideToolIndicator) return null;
+                                    return elements;
+                                  })()}
 
-                                           return (
-                                             <button
-                                               className="inline-flex items-center gap-1.5 py-1 px-2.5 text-xs font-medium text-primary bg-primary/10 hover:bg-primary/20 rounded-md transition-colors cursor-pointer border border-primary/20"
-                                             >
-                                               <CircleDashed className="h-3.5 w-3.5 text-primary flex-shrink-0 animate-spin animation-duration-2000" />
-                                               <span className="font-mono text-xs text-primary">{toolName}</span>
-                                               {paramDisplay && <span className="ml-1 text-primary/70 truncate max-w-[200px]" title={paramDisplay}>{paramDisplay}</span>}
-                                             </button>
-                                           );
-                                         })()}
-                                       </div>
-                                   )}
+                                  {groupIndex === groupedMessages.length - 1 && (streamHookStatus === 'streaming' || streamHookStatus === 'connecting') && (
+                                    <div className="mt-2"> 
+                                      {(() => {
+                                          let detectedTag: string | null = null;
+                                          let tagStartIndex = -1;
+                                          if (streamingTextContent) {
+                                              for (const tag of HIDE_STREAMING_XML_TAGS) {
+                                                  const openingTagPattern = `<${tag}`;
+                                                  const index = streamingTextContent.indexOf(openingTagPattern);
+                                                  if (index !== -1) {
+                                                      detectedTag = tag;
+                                                      tagStartIndex = index;
+                                                      break;
+                                                  }
+                                              }
+                                          }
 
+                                          const textToRender = streamingTextContent || '';
+                                          const textBeforeTag = detectedTag ? textToRender.substring(0, tagStartIndex) : textToRender;
+                                          const showCursor = (streamHookStatus === 'streaming' || streamHookStatus === 'connecting') && !detectedTag;
+
+                                          return (
+                                            <>
+                                              {textBeforeTag && (
+                                                <Markdown className="text-sm prose prose-sm dark:prose-invert chat-markdown max-w-none [&>:first-child]:mt-0 prose-headings:mt-3">{textBeforeTag}</Markdown>
+                                              )}
+                                              {showCursor && (
+                                                <span className="inline-block h-4 w-0.5 bg-primary ml-0.5 -mb-1 animate-pulse" />
+                                              )}
+
+                                              {detectedTag && (
+                                                <div className="mt-2 mb-1">
+                                                  <button
+                                                    className="inline-flex items-center gap-1.5 py-1 px-2.5 text-xs font-medium text-primary bg-primary/10 hover:bg-primary/20 rounded-md transition-colors cursor-pointer border border-primary/20"
+                                                  >
+                                                    <CircleDashed className="h-3.5 w-3.5 text-primary flex-shrink-0 animate-spin animation-duration-2000" />
+                                                    <span className="font-mono text-xs text-primary">{detectedTag}</span>
+                                                  </button>
+                                                </div>
+                                              )}
+
+                                              {streamingToolCall && !detectedTag && (
+                                                <div className="mt-2 mb-1">
+                                                  {(() => {
+                                                    const toolName = streamingToolCall.name || streamingToolCall.xml_tag_name || 'Tool';
+                                                    const IconComponent = getToolIcon(toolName);
+                                                    const paramDisplay = extractPrimaryParam(toolName, streamingToolCall.arguments || '');
+                                                    return (
+                                                      <button
+                                                        className="inline-flex items-center gap-1.5 py-1 px-2.5 text-xs font-medium text-primary bg-primary/10 hover:bg-primary/20 rounded-md transition-colors cursor-pointer border border-primary/20"
+                                                      >
+                                                        <CircleDashed className="h-3.5 w-3.5 text-primary flex-shrink-0 animate-spin animation-duration-2000" />
+                                                        <span className="font-mono text-xs text-primary">{toolName}</span>
+                                                        {paramDisplay && <span className="ml-1 text-primary/70 truncate max-w-[200px]" title={paramDisplay}>{paramDisplay}</span>}
+                                                      </button>
+                                                    );
+                                                  })()}
+                                                </div>
+                                              )}
+                                            </>
+                                          );
+                                      })()}
+                                    </div>
+                                  )}
                                 </div>
                               </div>
                             </div>
@@ -1511,8 +1476,7 @@ export default function ThreadPage({ params }: { params: Promise<ThreadParams> }
                     return null;
                   });
                 })()}
-                {(agentStatus === 'running' || agentStatus === 'connecting') &&
-                  !streamingMessageId && // Only show thinking indicator if not actively streaming text
+                {(agentStatus === 'running' || agentStatus === 'connecting') && 
                   (messages.length === 0 || messages[messages.length - 1].type === 'user') && (
                     <div ref={latestMessageRef}>
                       <div className="flex items-start gap-3">
@@ -1548,14 +1512,6 @@ export default function ThreadPage({ params }: { params: Promise<ThreadParams> }
           "mx-auto",
           isMobile ? "w-full px-4" : "max-w-3xl"
         )}>
-          {showScrollButton && (
-            <button
-              onClick={handleScrollButtonClick}
-              className="absolute bottom-24 right-6 z-20 flex h-8 w-8 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-md transition-opacity hover:bg-primary/90 focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2"
-            >
-              <ArrowDown className="h-4 w-4" />
-            </button>
-          )}
           <ChatInput
             value={newMessage}
             onChange={setNewMessage}
@@ -1577,6 +1533,7 @@ export default function ThreadPage({ params }: { params: Promise<ThreadParams> }
         onClose={() => {
           setIsSidePanelOpen(false);
           userClosedPanelRef.current = true;
+          setAutoOpenedPanel(true);
         }}
         toolCalls={toolCalls}
         messages={messages as ApiMessageType[]}
@@ -1603,7 +1560,7 @@ export default function ThreadPage({ params }: { params: Promise<ThreadParams> }
         message={billingData.message}
         currentUsage={billingData.currentUsage}
         limit={billingData.limit}
-        accountId={billingData.accountId || null}
+        accountId={billingData.accountId}
         onDismiss={() => setShowBillingAlert(false)}
         isOpen={showBillingAlert}
       />

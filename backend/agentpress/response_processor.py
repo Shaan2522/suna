@@ -959,19 +959,19 @@ class ResponseProcessor:
                     if mapping.node_type == "attribute":
                         # Extract attribute from opening tag
                         opening_tag = remaining_chunk.split('>', 1)[0]
-                        value = self._extract_attribute(opening_tag, mapping.path)
+                        value = self._extract_attribute(opening_tag, mapping.param_name)
                         if value is not None:
                             params[mapping.param_name] = value
-                            parsing_details["attributes"][mapping.path] = value # Store raw attribute
-                            logger.info(f"Found attribute {mapping.path} -> {mapping.param_name}: {value}")
+                            parsing_details["attributes"][mapping.param_name] = value # Store raw attribute
+                            logger.info(f"Found attribute {mapping.param_name}: {value}")
                 
                     elif mapping.node_type == "element":
                         # Extract element content
                         content, remaining_chunk = self._extract_tag_content(remaining_chunk, mapping.path)
                         if content is not None:
                             params[mapping.param_name] = content.strip()
-                            parsing_details["elements"][mapping.path] = content.strip() # Store raw element content
-                            logger.info(f"Found element {mapping.path} -> {mapping.param_name}")
+                            parsing_details["elements"][mapping.param_name] = content.strip() # Store raw element content
+                            logger.info(f"Found element {mapping.param_name}: {content.strip()}")
                 
                     elif mapping.node_type == "text":
                         # Extract text content
@@ -979,7 +979,7 @@ class ResponseProcessor:
                         if content is not None:
                             params[mapping.param_name] = content.strip()
                             parsing_details["text_content"] = content.strip() # Store raw text content
-                            logger.info(f"Found text content for {mapping.param_name}")
+                            logger.info(f"Found text content for {mapping.param_name}: {content.strip()}")
                 
                     elif mapping.node_type == "content":
                         # Extract root content

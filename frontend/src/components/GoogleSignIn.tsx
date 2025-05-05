@@ -68,6 +68,9 @@ export default function GoogleSignIn({ returnUrl }: GoogleSignInProps) {
     try {
       setIsLoading(true);
       const supabase = createClient();
+      
+      console.log('Starting Google sign in process');
+      
       const { error } = await supabase.auth.signInWithIdToken({
         provider: 'google',
         token: response.credential,
@@ -75,10 +78,13 @@ export default function GoogleSignIn({ returnUrl }: GoogleSignInProps) {
 
       if (error) throw error;
       
-      // Add a small delay before redirecting to ensure localStorage is properly saved
+      console.log('Google sign in successful, preparing redirect to:', returnUrl || "/dashboard");
+      
+      // Add a longer delay before redirecting to ensure localStorage is properly saved
       setTimeout(() => {
+        console.log('Executing redirect now to:', returnUrl || "/dashboard");
         window.location.href = returnUrl || "/dashboard";
-      }, 100);
+      }, 500); // Increased from 100ms to 500ms
     } catch (error) {
       console.error('Error signing in with Google:', error);
       setIsLoading(false);

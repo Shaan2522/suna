@@ -6,6 +6,7 @@ import { FlickeringGrid } from "@/components/home/ui/flickering-grid";
 import { Globe } from "@/components/home/ui/globe";
 import { cn } from "@/lib/utils";
 import { motion } from "motion/react";
+import { config } from '@/lib/config';
 
 export const Highlight = ({
   children,
@@ -27,6 +28,25 @@ export const Highlight = ({
 };
 
 export const BLUR_FADE_DELAY = 0.15;
+
+interface UpgradePlan {
+  hours: string;
+  price: string;
+  stripePriceId: string;
+}
+
+export interface PricingTier {
+  name: string;
+  price: string;
+  description: string;
+  buttonText: string;
+  buttonColor: string;
+  isPopular: boolean;
+  hours: string;
+  features: string[];
+  stripePriceId: string;
+  upgradePlans: UpgradePlan[];
+}
 
 export const siteConfig = {
   name: "Kortix Suna",
@@ -79,54 +99,53 @@ export const siteConfig = {
     {
       name: "Free",
       price: "$0",
-      description: "For individual use and exploration",
+      description: "Get started with",
       buttonText: "Hire Suna",
       buttonColor: "bg-secondary text-white",
       isPopular: false,
       hours: "10 min",
       features: [
-        "10 minutes",
-        // "Community support",
-        // "Single user",
-        // "Standard response time",
+        "Public Projects",
       ],
-      stripePriceId: 'price_1RGJ9GG6l1KZGqIroxSqgphC',
+      stripePriceId: config.SUBSCRIPTION_TIERS.FREE.priceId,
+      upgradePlans: [],
     },
     {
       name: "Pro",
-      price: "$29",
-      description: "For professionals and small teams",
+      price: "$20",
+      description: "Everything in Free, plus:",
       buttonText: "Hire Suna",
       buttonColor: "bg-primary text-white dark:text-black",
       isPopular: true,
-      hours: "4 hours",
+      hours: "2 hours",
       features: [
-        "4 hours usage per month",
-        // "Priority support",
-        // "Advanced features",
-        // "5 team members",
-        // "Custom integrations",
+        "2 hours",
+        "Private projects",
+        "Team functionality (coming soon)",
       ],
-      stripePriceId: 'price_1RGJ9LG6l1KZGqIrd9pwzeNW',
+      stripePriceId: config.SUBSCRIPTION_TIERS.TIER_2_20.priceId,
+      upgradePlans: [],
     },
     {
-      name: "Enterprise",
-      price: "$199",
-      description: "For organizations with complex needs",
+      name: "Custom",
+      price: "$50",
+      description: "Everything in Pro, plus:",
       buttonText: "Hire Suna",
       buttonColor: "bg-secondary text-white",
       isPopular: false,
-      hours: "40 hours",
+      hours: "6 hours",
       features: [
-        "40 hours usage per month",
-        // "Dedicated support",
-        // "SSO & advanced security",
-        // "Unlimited team members",
-        // "Service level agreement",
-        // "Custom AI model training",
+        "Unlimited seats",
       ],
-      showContactSales: true,
-      stripePriceId: 'price_1RGJ9JG6l1KZGqIrVUU4ZRv6',
+      upgradePlans: [
+        { hours: "6 hours", price: "$50", stripePriceId: config.SUBSCRIPTION_TIERS.TIER_6_50.priceId },
+        { hours: "12 hours", price: "$100", stripePriceId: config.SUBSCRIPTION_TIERS.TIER_12_100.priceId },
+        { hours: "25 hours", price: "$200", stripePriceId: config.SUBSCRIPTION_TIERS.TIER_25_200.priceId },
+        { hours: "50 hours", price: "$400", stripePriceId: config.SUBSCRIPTION_TIERS.TIER_50_400.priceId },
+        { hours: "125 hours", price: "$800", stripePriceId: config.SUBSCRIPTION_TIERS.TIER_125_800.priceId },
+        { hours: "200 hours", price: "$1000", stripePriceId: config.SUBSCRIPTION_TIERS.TIER_200_1000.priceId },
+      ],
+      stripePriceId: config.SUBSCRIPTION_TIERS.TIER_6_50.priceId,
     },
   ],
   companyShowcase: {

@@ -9,7 +9,7 @@ import { useScroll } from "motion/react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/components/AuthProvider";
-import { createProject, createThread, addUserMessage, startAgent } from "@/lib/api";
+import { createProject, createThread, addUserMessage, startAgent, BillingError } from "@/lib/api";
 import { generateThreadName } from "@/lib/actions/threads";
 import GoogleSignIn from "@/components/GoogleSignIn";
 import { Input } from "@/components/ui/input";
@@ -22,6 +22,11 @@ import {
   DialogTitle,
   DialogOverlay
 } from "@/components/ui/dialog";
+import { BillingErrorAlert } from '@/components/billing/usage-limit-alert';
+import { useBillingError } from "@/hooks/useBillingError";
+import { useAccounts } from "@/hooks/use-accounts";
+import { isLocalMode, config } from "@/lib/config";
+import { toast } from "sonner";
 
 // Custom dialog overlay with blur effect
 const BlurredDialogOverlay = () => (
@@ -42,6 +47,9 @@ export function HeroSection() {
   const [inputValue, setInputValue] = useState("");
   const router = useRouter();
   const { user, isLoading } = useAuth();
+  const { billingError, handleBillingError, clearBillingError } = useBillingError();
+  const { data: accounts } = useAccounts();
+  const personalAccount = accounts?.find(account => account.personal_account);
   
   // Auth dialog state
   const [authDialogOpen, setAuthDialogOpen] = useState(false);
@@ -119,8 +127,32 @@ export function HeroSection() {
       
       // 5. Navigate to the new agent's thread page
       router.push(`/agents/${thread.thread_id}`);
-    } catch (error) {
+      // Clear input on success
+      setInputValue("");
+    } catch (error: any) {
       console.error("Error creating agent:", error);
+
+      // Check specifically for BillingError (402)
+      if (error instanceof BillingError) {
+        console.log("Handling BillingError from hero section:", error.detail);
+        handleBillingError({
+          message: error.detail.message || 'Monthly usage limit reached. Please upgrade your plan.',
+          currentUsage: error.detail.currentUsage as number | undefined,
+          limit: error.detail.limit as number | undefined,
+          subscription: error.detail.subscription || {
+            price_id: config.SUBSCRIPTION_TIERS.FREE.priceId, // Default Free
+            plan_name: "Free"
+          }
+        });
+        // Don't show toast for billing errors
+      } else {
+         // Handle other errors (e.g., network, other API errors)
+         const isConnectionError = error instanceof TypeError && error.message.includes('Failed to fetch');
+         if (!isLocalMode() || isConnectionError) {
+            toast.error(error.message || "Failed to create agent. Please try again.");
+         }
+      }
+    } finally {
       setIsSubmitting(false);
     }
   };
@@ -401,6 +433,16 @@ export function HeroSection() {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* Add Billing Error Alert here */}
+      <BillingErrorAlert 
+        message={billingError?.message}
+        currentUsage={billingError?.currentUsage}
+        limit={billingError?.limit}
+        accountId={personalAccount?.account_id}
+        onDismiss={clearBillingError}
+        isOpen={!!billingError}
+      />
     </section>
   );
 }

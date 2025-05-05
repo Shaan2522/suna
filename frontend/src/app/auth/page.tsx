@@ -101,8 +101,19 @@ function LoginContent() {
   const handleSignIn = async (prevState: any, formData: FormData) => {
     if (returnUrl) {
       formData.append("returnUrl", returnUrl);
+    } else {
+      formData.append("returnUrl", "/dashboard");
     }
-    return signIn(prevState, formData);
+    const result = await signIn(prevState, formData);
+    
+    // Check for success and redirectTo properties
+    if (result && typeof result === 'object' && 'success' in result && result.success && 'redirectTo' in result) {
+      // Use window.location for hard navigation to avoid stale state
+      window.location.href = result.redirectTo as string;
+      return null; // Return null to prevent normal form action completion
+    }
+    
+    return result;
   };
 
   const handleSignUp = async (prevState: any, formData: FormData) => {
@@ -118,6 +129,13 @@ function LoginContent() {
     formData.append("origin", window.location.origin);
     
     const result = await signUp(prevState, formData);
+    
+    // Check for success and redirectTo properties (direct login case)
+    if (result && typeof result === 'object' && 'success' in result && result.success && 'redirectTo' in result) {
+      // Use window.location for hard navigation to avoid stale state
+      window.location.href = result.redirectTo as string;
+      return null; // Return null to prevent normal form action completion
+    }
     
     // Check if registration was successful but needs email verification
     if (result && typeof result === 'object' && 'message' in result) {
@@ -166,9 +184,10 @@ function LoginContent() {
 
   const resetRegistrationSuccess = () => {
     setRegistrationSuccess(false);
-    // Remove message from URL
+    // Remove message from URL and set mode to signin
     const params = new URLSearchParams(window.location.search);
     params.delete('message');
+    params.set('mode', 'signin');
     
     const newUrl = 
       window.location.pathname + 

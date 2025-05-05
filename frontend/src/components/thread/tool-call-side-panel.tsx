@@ -18,6 +18,7 @@ import { FileOperationToolView } from "./tool-views/FileOperationToolView";
 import { BrowserToolView } from "./tool-views/BrowserToolView";
 import { WebSearchToolView } from "./tool-views/WebSearchToolView";
 import { WebCrawlToolView } from "./tool-views/WebCrawlToolView";
+import { WebScrapeToolView } from "./tool-views/WebScrapeToolView";
 import { DataProviderToolView } from "./tool-views/DataProviderToolView";
 import { ExposePortToolView } from "./tool-views/ExposePortToolView";
 
@@ -134,6 +135,16 @@ function getToolView(
     case 'crawl-webpage':
       return (
         <WebCrawlToolView
+          assistantContent={assistantContent}
+          toolContent={toolContent}
+          assistantTimestamp={assistantTimestamp}
+          toolTimestamp={toolTimestamp}
+          isSuccess={isSuccess}
+        />
+      );
+    case 'scrape-webpage':
+      return (
+        <WebScrapeToolView
           assistantContent={assistantContent}
           toolContent={toolContent}
           assistantTimestamp={assistantTimestamp}
@@ -501,14 +512,36 @@ export function ToolCallSidePanel({
               </Button>
             </div>
           ) : (
-            <Slider
-              min={0}
-              max={totalCalls - 1}
-              step={1}
-              value={[currentIndex]}
-              onValueChange={([newValue]) => onNavigate(newValue)}
-              className="w-full [&>span:first-child]:h-1 [&>span:first-child]:bg-zinc-200 dark:[&>span:first-child]:bg-zinc-800 [&>span:first-child>span]:bg-zinc-500 dark:[&>span:first-child>span]:bg-zinc-400 [&>span:first-child>span]:h-1"
-            />
+            <div className="flex items-center gap-1.5">
+              <div className="flex items-center gap-1">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={navigateToPrevious}
+                  disabled={currentIndex <= 0}
+                  className="h-6 w-6 text-zinc-500 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-200"
+                >
+                  <ChevronLeft className="h-3.5 w-3.5" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={navigateToNext}
+                  disabled={currentIndex >= totalCalls - 1}
+                  className="h-6 w-6 text-zinc-500 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-200"
+                >
+                  <ChevronRight className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+              <Slider
+                min={0}
+                max={totalCalls - 1}
+                step={1}
+                value={[currentIndex]}
+                onValueChange={([newValue]) => onNavigate(newValue)}
+                className="w-full [&>span:first-child]:h-1 [&>span:first-child]:bg-zinc-200 dark:[&>span:first-child]:bg-zinc-800 [&>span:first-child>span]:bg-zinc-500 dark:[&>span:first-child>span]:bg-zinc-400 [&>span:first-child>span]:h-1"
+              />
+            </div>
           )}
         </div>
       )}

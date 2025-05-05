@@ -13,32 +13,84 @@ export function CommandToolView({
   isSuccess = true,
   isStreaming = false
 }: ToolViewProps) {
+  // Extract command with improved XML parsing
+  const rawCommand = React.useMemo(() => {
+    if (!assistantContent) return null;
+    
+    try {
+      // Try to parse JSON content first
+      const parsed = JSON.parse(assistantContent);
+      if (parsed.content) {
+        // Look for execute-command tag
+        const commandMatch = parsed.content.match(/<execute-command[^>]*>([\s\S]*?)<\/execute-command>/);
+        if (commandMatch) {
+          return commandMatch[1].trim();
+        }
+      }
+    } catch (e) {
+      // If JSON parsing fails, try direct XML extraction
+      const commandMatch = assistantContent.match(/<execute-command[^>]*>([\s\S]*?)<\/execute-command>/);
+      if (commandMatch) {
+        return commandMatch[1].trim();
+      }
+    }
+    
+    return null;
+  }, [assistantContent]);
+
   // Clean the command by removing any leading/trailing whitespace and newlines
-  const rawCommand = extractCommand(assistantContent);
-  // First remove the prompt prefix, then remove any newlines and extra spaces
   const command = rawCommand
     ?.replace(/^suna@computer:~\$\s*/g, '') // Remove prompt prefix
     ?.replace(/\\n/g, '') // Remove escaped newlines
     ?.replace(/\n/g, '') // Remove actual newlines
     ?.trim(); // Clean up any remaining whitespace
   
-  // Extract and clean the output
-  const rawOutput = extractCommandOutput(toolContent);
-  let output = rawOutput;
-  
-  // Try to parse JSON if the output contains JSON structure
-  try {
-    if (rawOutput && rawOutput.includes('"output"')) {
-      const jsonMatch = rawOutput.match(/"output":\s*"([\s\S]*?)"/);
-      if (jsonMatch && jsonMatch[1]) {
-        // Replace escaped newlines with actual newlines
-        output = jsonMatch[1].replace(/\\n/g, '\n').replace(/\\"/g, '"');
+  // Extract and clean the output with improved parsing
+  const output = React.useMemo(() => {
+    if (!toolContent) return null;
+    
+    try {
+      // Try to parse JSON content first
+      const parsed = JSON.parse(toolContent);
+      if (parsed.content) {
+        // Look for tool_result tag
+        const toolResultMatch = parsed.content.match(/<tool_result>\s*<execute-command>([\s\S]*?)<\/execute-command>\s*<\/tool_result>/);
+        if (toolResultMatch) {
+          return toolResultMatch[1].trim();
+        }
+        
+        // Look for output field in a ToolResult pattern
+        const outputMatch = parsed.content.match(/ToolResult\(.*?output='([\s\S]*?)'.*?\)/);
+        if (outputMatch) {
+          return outputMatch[1].replace(/\\n/g, '\n').replace(/\\"/g, '"');
+        }
+        
+        // Try to parse as direct JSON
+        try {
+          const outputJson = JSON.parse(parsed.content);
+          if (outputJson.output) {
+            return outputJson.output;
+          }
+        } catch (e) {
+          // If JSON parsing fails, use the content as-is
+          return parsed.content;
+        }
+      }
+    } catch (e) {
+      // If JSON parsing fails, try direct XML extraction
+      const toolResultMatch = toolContent.match(/<tool_result>\s*<execute-command>([\s\S]*?)<\/execute-command>\s*<\/tool_result>/);
+      if (toolResultMatch) {
+        return toolResultMatch[1].trim();
+      }
+      
+      const outputMatch = toolContent.match(/ToolResult\(.*?output='([\s\S]*?)'.*?\)/);
+      if (outputMatch) {
+        return outputMatch[1].replace(/\\n/g, '\n').replace(/\\"/g, '"');
       }
     }
-  } catch (e) {
-    // If parsing fails, use the original output
-    console.error("Error parsing command output:", e);
-  }
+    
+    return toolContent;
+  }, [toolContent]);
   
   const exitCode = extractExitCode(toolContent);
   const toolTitle = getToolTitle(name);

@@ -23,6 +23,7 @@ export function getToolTitle(toolName: string): string {
     'delete-file': 'Delete File',
     'web-search': 'Web Search',
     'crawl-webpage': 'Web Crawl',
+    'scrape-webpage': 'Web Scrape',
     'browser-navigate': 'Browser Navigate',
     'browser-click': 'Browser Click',
     'browser-extract': 'Browser Extract',
@@ -428,7 +429,7 @@ export function cleanUrl(url: string): string {
   }
 }
 
-// Helper to extract URL for webpage crawling
+// Helper to extract URL for webpage crawling/scraping
 export function extractCrawlUrl(content: string | undefined): string | null {
   if (!content) return null;
   
@@ -437,7 +438,7 @@ export function extractCrawlUrl(content: string | undefined): string | null {
     const parsedContent = JSON.parse(content);
     if (parsedContent.content) {
       // Look for URL in the content string
-      const urlMatch = parsedContent.content.match(/<crawl-webpage\s+url=["'](https?:\/\/[^"']+)["']/i);
+      const urlMatch = parsedContent.content.match(/<(?:crawl|scrape)-webpage\s+url=["'](https?:\/\/[^"']+)["']/i);
       if (urlMatch) return urlMatch[1];
     }
   } catch (e) {
@@ -445,13 +446,13 @@ export function extractCrawlUrl(content: string | undefined): string | null {
   }
   
   // Direct regex search in the content string
-  const urlMatch = content.match(/<crawl-webpage\s+url=["'](https?:\/\/[^"']+)["']/i) || 
+  const urlMatch = content.match(/<(?:crawl|scrape)-webpage\s+url=["'](https?:\/\/[^"']+)["']/i) || 
                    content.match(/url=["'](https?:\/\/[^"']+)["']/i);
   
   return urlMatch ? urlMatch[1] : null;
 }
 
-// Helper to extract webpage content from crawl result
+// Helper to extract webpage content from crawl/scrape result
 export function extractWebpageContent(content: string | undefined): { title: string, text: string } | null {
   if (!content) return null;
   
@@ -462,7 +463,7 @@ export function extractWebpageContent(content: string | undefined): { title: str
     // Handle case where content is in parsedContent.content field
     if (parsedContent.content && typeof parsedContent.content === 'string') {
       // Look for tool_result tag
-      const toolResultMatch = parsedContent.content.match(/<tool_result>\s*<crawl-webpage>([\s\S]*?)<\/crawl-webpage>\s*<\/tool_result>/);
+      const toolResultMatch = parsedContent.content.match(/<tool_result>\s*<(?:crawl|scrape)-webpage>([\s\S]*?)<\/(?:crawl|scrape)-webpage>\s*<\/tool_result>/);
       if (toolResultMatch) {
         try {
           // Try to parse the content inside the tags
@@ -555,10 +556,10 @@ export function extractWebpageContent(content: string | undefined): { title: str
       }
     }
     
-    // Direct handling of <crawl-webpage> format outside of content field
-    const crawlWebpageMatch = content.match(/<crawl-webpage>([\s\S]*?)<\/crawl-webpage>/);
-    if (crawlWebpageMatch) {
-      const rawData = crawlWebpageMatch[1];
+    // Direct handling of <crawl-webpage> or <scrape-webpage> format outside of content field
+    const webpageMatch = content.match(/<(?:crawl|scrape)-webpage>([\s\S]*?)<\/(?:crawl|scrape)-webpage>/);
+    if (webpageMatch) {
+      const rawData = webpageMatch[1];
       
       // Look for ToolResult pattern
       const toolResultOutputMatch = rawData.match(/ToolResult\(.*?output='([\s\S]*?)'.*?\)/);
@@ -741,6 +742,8 @@ export function getToolComponent(toolName: string): string {
       return 'WebSearchToolView';
     case 'crawl-webpage':
       return 'WebCrawlToolView';
+    case 'scrape-webpage':
+      return 'WebScrapeToolView';
       
     // Data provider operations
     case 'execute-data-provider-call':

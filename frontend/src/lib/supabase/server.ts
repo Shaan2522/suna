@@ -4,10 +4,21 @@ import { cookies } from "next/headers";
 
 export const createClient = async () => {
   const cookieStore = await cookies();
+  let supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+  
+  // Ensure the URL is in the proper format with http/https protocol
+  if (supabaseUrl && !supabaseUrl.startsWith('http')) {
+    // If it's just a hostname without protocol, add http://
+    supabaseUrl = `http://${supabaseUrl}`;
+  }
+  
+  // console.log('[SERVER] Supabase URL:', supabaseUrl);
+  // console.log('[SERVER] Supabase Anon Key:', supabaseAnonKey);
 
   return createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    supabaseUrl,
+    supabaseAnonKey,
     {
       cookies: {
         getAll() {
